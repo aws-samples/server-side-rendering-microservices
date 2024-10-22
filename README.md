@@ -18,7 +18,7 @@ The backend of the application consists of two main components:
 
 To get started with this project, follow these steps:
 
-1. Clone the repository: `git clone https://github.com/your-repo/serverless-frontend-cdk.git`
+1. Clone the repository: `git clone https://github.com/aws-samples/server-side-rendering-microservices.git`
 2. Install the required dependencies: `npm install`
 3. Configure your AWS credentials
 4. Deploy the infrastructure using the CDK: `npm run deploy`
