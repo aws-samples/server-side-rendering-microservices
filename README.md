@@ -4,8 +4,6 @@ This project demonstrates a serverless microservices architecture built using Ja
 
 ## Architecture Overview
 
-![Architecture Diagram](architecture.png)
-
 The application is built with the following components:
 
 1. **Catalog Service**: Handles product catalog management and queries
@@ -32,7 +30,7 @@ Each service is implemented as a separate Lambda function, providing isolation a
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/aws-samples/server-side-rendering-microservices.git
    cd java-ssr-micro_service
    ```
 
