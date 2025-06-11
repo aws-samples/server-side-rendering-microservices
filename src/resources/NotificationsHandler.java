@@ -22,13 +22,14 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSyntaxException;
 
 public class NotificationsHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
     private static final Logger logger = LoggerFactory.getLogger(NotificationsHandler.class);
     private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-    private final DynamoDbClient dynamoDb = DynamoDbClient.builder().build();
-    private final SnsClient sns = SnsClient.builder().build();
+    private static final DynamoDbClient dynamoDb = DynamoDbClient.builder().build();
+    private static final SnsClient sns = SnsClient.builder().build();
     private final String tableName = System.getenv("NOTIFICATIONS_TABLE_NAME");
     private final String snsTopicArn = System.getenv("NOTIFICATIONS_TOPIC_ARN");
 
@@ -52,20 +53,38 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                 default:
                     return buildResponse(400, "Invalid HTTP method");
             }
-        } catch (Exception e) {
-            logger.error("Error processing request", e);
-            return buildResponse(500, "Internal server error: " + e.getMessage());
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error processing request", e);
+            return buildResponse(500, "Internal server error while accessing the database.");
+        } catch (SnsException e) {
+            logger.error("SNS error processing request", e);
+            return buildResponse(500, "Internal server error while sending notification.");
+        } catch (JsonSyntaxException e) {
+            logger.error("JSON syntax error processing request", e);
+            return buildResponse(400, "Invalid JSON format in request.");
+        } catch (RuntimeException e) {
+            logger.error("Unexpected runtime error processing request", e);
+            String errorMsg = String.format("Unexpected server error: %s", e.getMessage());
+            return buildResponse(500, errorMsg);
         }
     }
 
     private APIGatewayProxyResponseEvent handleGetRequest(String path) {
         if (path.matches("/notifications/user/\\w+")) {
-            return getUserNotifications(path.split("/")[3]);
+            String[] pathParts = path.split("/");
+            if (pathParts.length >= 4) {
+                String userId = pathParts[3];
+                if (userId == null || userId.trim().isEmpty()) {
+                    return buildResponse(400, "User ID in path cannot be null or empty");
+                }
+                return getUserNotifications(userId);
+            } else {
+                return buildResponse(400, "Invalid path format for user notifications");
+            }
         } else if (path.matches("/notifications/\\w+")) {
             return getNotification(path.substring(path.lastIndexOf("/") + 1));
-        } else {
-            return listNotifications();
         }
+        return listNotifications();
     }
 
     private APIGatewayProxyResponseEvent handlePutRequest(String path) {
@@ -98,37 +117,46 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
         } catch (DynamoDbException e) {
             logger.error("Error getting notification from DynamoDB", e);
             return buildResponse(500, "Error retrieving notification from database");
-        } catch (Exception e) {
-            logger.error("Unexpected error getting notification", e);
-            return buildResponse(500, "Unexpected error retrieving notification");
         }
     }
 
     private APIGatewayProxyResponseEvent getUserNotifications(String userId) {
         try {
-            List<Map<String, AttributeValue>> allItems = new ArrayList<>();
+            List<Map<String, AttributeValue>> items = new ArrayList<>();
             Map<String, AttributeValue> lastEvaluatedKey = null;
+            final int MAX_ITEMS = 100; // Maximum number of items to fetch per query
+
+            QueryRequest.Builder queryBuilder = QueryRequest.builder()
+                .tableName(tableName)
+                .indexName("userId-index")
+                .keyConditionExpression("userId = :uid")
+                .expressionAttributeValues(Map.of(":uid", AttributeValue.builder().s(userId).build()))
+                .limit(MAX_ITEMS);
 
             do {
-                QueryRequest.Builder queryBuilder = QueryRequest.builder()
-                    .tableName(tableName)
-                    .indexName("userId-index")
-                    .keyConditionExpression("userId = :uid")
-                    .expressionAttributeValues(Map.of(":uid", AttributeValue.builder().s(userId).build()));
-
                 if (lastEvaluatedKey != null) {
                     queryBuilder.exclusiveStartKey(lastEvaluatedKey);
                 }
 
                 QueryResponse response = dynamoDb.query(queryBuilder.build());
-                allItems.addAll(response.items());
+                items.addAll(response.items());
                 lastEvaluatedKey = response.lastEvaluatedKey();
+
+                if (items.size() >= MAX_ITEMS) {
+                    break; // Stop fetching if we've reached the maximum number of items
+                }
             } while (lastEvaluatedKey != null);
 
-            return buildResponse(200, gson.toJson(allItems));
-        } catch (Exception e) {
-            logger.error("Error getting user notifications", e);
-            return buildResponse(500, "Error retrieving user notifications");
+            Map<String, Object> result = new HashMap<>();
+            result.put("items", items);
+            if (lastEvaluatedKey != null) {
+                result.put("nextToken", gson.toJson(lastEvaluatedKey));
+            }
+
+            return buildResponse(200, gson.toJson(result));
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error getting user notifications", e);
+            return buildResponse(500, "DynamoDB error retrieving user notifications");
         }
     }
 
@@ -137,10 +165,12 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
         try {
             List<Map<String, AttributeValue>> allItems = new ArrayList<>();
             Map<String, AttributeValue> lastEvaluatedKey = null;
+            final int MAX_ITEMS = 100; // Maximum number of items to fetch per scan
 
             do {
                 ScanRequest.Builder scanRequestBuilder = ScanRequest.builder()
-                    .tableName(tableName);
+                    .tableName(tableName)
+                    .limit(MAX_ITEMS);
 
                 if (lastEvaluatedKey != null) {
                     scanRequestBuilder.exclusiveStartKey(lastEvaluatedKey);
@@ -149,9 +179,19 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                 ScanResponse response = dynamoDb.scan(scanRequestBuilder.build());
                 allItems.addAll(response.items());
                 lastEvaluatedKey = response.lastEvaluatedKey();
+
+                if (allItems.size() >= MAX_ITEMS) {
+                    break; // Stop fetching if we've reached the maximum number of items
+                }
             } while (lastEvaluatedKey != null);
 
-            return buildResponse(200, gson.toJson(allItems));
+            Map<String, Object> result = new HashMap<>();
+            result.put("items", allItems);
+            if (lastEvaluatedKey != null) {
+                result.put("nextToken", gson.toJson(lastEvaluatedKey));
+            }
+
+            return buildResponse(200, gson.toJson(result));
         } catch (Exception e) {
             logger.error("Error listing notifications", e);
             return buildResponse(500, "Error listing notifications");
@@ -170,10 +210,20 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
             item.put("read", AttributeValue.builder().bool(false).build());
             item.put("timestamp", AttributeValue.builder().s(String.valueOf(System.currentTimeMillis())).build());
 
+            // More efficient conversion of JsonObject to Map<String, AttributeValue>
             for (Map.Entry<String, JsonElement> entry : jsonObject.entrySet()) {
                 String key = entry.getKey();
-                String value = entry.getValue().getAsString();
-                item.put(key, AttributeValue.builder().s(value).build());
+                JsonElement value = entry.getValue();
+                if (value.isJsonPrimitive()) {
+                    JsonPrimitive primitive = value.getAsJsonPrimitive();
+                    if (primitive.isString()) {
+                        item.put(key, AttributeValue.builder().s(primitive.getAsString()).build());
+                    } else if (primitive.isNumber()) {
+                        item.put(key, AttributeValue.builder().n(primitive.getAsString()).build());
+                    } else if (primitive.isBoolean()) {
+                        item.put(key, AttributeValue.builder().bool(primitive.getAsBoolean()).build());
+                    }
+                }
             }
 
             // Store in DynamoDB
@@ -200,9 +250,12 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
         } catch (JsonSyntaxException e) {
             logger.error("Error parsing JSON", e);
             return buildResponse(400, "Invalid JSON format");
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument error", e);
+            return buildResponse(400, "Invalid input: " + e.getMessage());
         } catch (Exception e) {
-            logger.error("Unexpected error creating notification", e);
-            return buildResponse(500, "Unexpected error creating notification");
+            logger.error("Unexpected error creating notification: {}", e.getMessage(), e);
+            return buildResponse(500, "An unexpected error occurred while creating the notification. Please contact support if the problem persists.");
         }
     }
 
@@ -210,25 +263,24 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
         try {
             Map<String, AttributeValue> key = Map.of("notificationId", AttributeValue.builder().s(notificationId).build());
             
-            // Check if the notification exists before updating
-            GetItemResponse getItemResponse = dynamoDb.getItem(GetItemRequest.builder()
-                .tableName(tableName)
-                .key(key)
-                .build());
-
-            if (!getItemResponse.hasItem()) {
-                return buildResponse(404, "Notification not found");
-            }
-
-            dynamoDb.updateItem(UpdateItemRequest.builder()
+            UpdateItemResponse updateItemResponse = dynamoDb.updateItem(UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(key)
                 .updateExpression("SET #read = :val")
+                .conditionExpression("attribute_exists(notificationId)")
                 .expressionAttributeNames(Map.of("#read", "read"))
                 .expressionAttributeValues(Map.of(":val", AttributeValue.builder().bool(true).build()))
+                .returnValues(ReturnValue.UPDATED_NEW)
                 .build());
 
+            if (updateItemResponse.attributes().isEmpty()) {
+                return buildResponse(404, "Notification not found");
+            }
+
             return buildResponse(200, "Notification marked as read");
+        } catch (ConditionalCheckFailedException e) {
+            logger.error("Notification not found", e);
+            return buildResponse(404, "Notification not found");
         } catch (DynamoDbException e) {
             logger.error("Error marking notification as read", e);
             return buildResponse(500, "Error updating notification");
@@ -247,29 +299,32 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                 return buildResponse(404, "Notification not found");
             }
 
-            return buildResponse(200, String.format("Notification deleted successfully. Deleted item: %s", gson.toJson(deleteItemResponse.attributes())));
+            return buildResponse(200, String.format("Notification deleted successfully. Deleted notification ID: %s", notificationId));
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error deleting notification", e);
+            return buildResponse(500, "DynamoDB error deleting notification");
         } catch (Exception e) {
-            logger.error("Error deleting notification", e);
-            return buildResponse(500, "Error deleting notification");
+            logger.error("Unexpected error deleting notification", e);
+            throw new RuntimeException("Unexpected error deleting notification", e);
         }
     }
 
     private APIGatewayProxyResponseEvent buildResponse(int statusCode, String body) {
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
             .withStatusCode(statusCode)
-            .withHeaders(createHeaders())
+            .withHeaders(HEADERS)
             .withBody(body);
 
         logger.info("Returning response: {}", response);
         return response;
     }
 
-    private Map<String, String> createHeaders() {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "application/json");
-        headers.put("Access-Control-Allow-Origin", "*");
-        headers.put("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-        headers.put("Access-Control-Allow-Headers", "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token");
-        return headers;
+    private static final Map<String, String> HEADERS;
+    static {
+        HEADERS = new HashMap<>();
+        HEADERS.put("Content-Type", "application/json");
+        HEADERS.put("Access-Control-Allow-Origin", "*");
+        HEADERS.put("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+        HEADERS.put("Access-Control-Allow-Headers", "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token");
     }
 }

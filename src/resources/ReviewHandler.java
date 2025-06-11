@@ -4,11 +4,10 @@ import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.*;
-// import software.amazon.awssdk.thirdparty.jackson.core.JsonParser;
 import com.google.gson.JsonParser;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.owasp.encoder.Encode;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -20,6 +19,7 @@ import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonSyntaxException;
+
 
 public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
     private static final Logger logger = LoggerFactory.getLogger(ReviewHandler.class);
@@ -39,7 +39,8 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
                 case "GET":
                     if (path.matches("/reviews/product/\\w+")) {
                         String[] pathParts = path.split("/");
-                        if (pathParts.length >= 4) {
+                        // import org.apache.commons.lang3.ArrayUtils
+                        if (pathParts != null && pathParts.length >= 4) {
                             return getProductReviews(pathParts[3]);
                         }
                         return buildResponse(400, "Invalid path");
@@ -63,9 +64,15 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
                 default:
                     return buildResponse(400, "Invalid HTTP method");
             }
-        } catch (Exception e) {
-            logger.error("Error processing request", e);
-            return buildResponse(500, "Internal server error: " + e.getMessage());
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error processing request", e);
+            return buildResponse(500, "Database error: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument in request", e);
+            return buildResponse(400, "Invalid request: " + e.getMessage());
+        } catch (RuntimeException e) {
+            logger.error("Unexpected runtime error processing request", e);
+            throw e; // Rethrow to avoid swallowing unexpected exceptions
         }
         return buildResponse(400, "Invalid request");
     }
@@ -84,53 +91,68 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
             }
         } catch (DynamoDbException e) {
             logger.error("Error getting review from DynamoDB", e);
-            return buildResponse(500, "Error retrieving review: " + e.getMessage());
-        } catch (Exception e) {
-            logger.error("Unexpected error getting review", e);
-            return buildResponse(500, "Unexpected error retrieving review");
+            return buildResponse(500, "Error retrieving review");
+        } catch (RuntimeException e) {
+            logger.error("Unexpected runtime error getting review", e);
+            throw e; // Rethrow to avoid swallowing unexpected exceptions
         }
     }
 
     private APIGatewayProxyResponseEvent getProductReviews(String productId) {
         try {
-            String exclusiveStartKey = null;
+            Map<String, AttributeValue> exclusiveStartKey = null;
             List<Map<String, AttributeValue>> allItems = new ArrayList<>();
-            do {
-                QueryRequest.Builder queryBuilder = QueryRequest.builder()
-                    .tableName(tableName)
-                    .indexName("productId-index")
-                    .keyConditionExpression("productId = :pid")
-                    .expressionAttributeValues(Map.of(":pid", AttributeValue.builder().s(productId).build()))
-                    .limit(100); // Set a reasonable page size
+            int pageSize = 100; // Set a reasonable page size
+            
+            QueryRequest.Builder queryBuilder = QueryRequest.builder()
+                .tableName(tableName)
+                .indexName("productId-index")
+                .keyConditionExpression("productId = :pid")
+                .expressionAttributeValues(Map.of(":pid", AttributeValue.builder().s(productId).build()))
+                .limit(pageSize);
 
+            QueryResponse response;
+            do {
                 if (exclusiveStartKey != null) {
-                    queryBuilder.exclusiveStartKey(gson.fromJson(exclusiveStartKey, Map.class));
+                    queryBuilder.exclusiveStartKey(exclusiveStartKey);
                 }
 
-                QueryResponse response = dynamoDb.query(queryBuilder.build());
+                response = dynamoDb.query(queryBuilder.build());
                 allItems.addAll(response.items());
-                exclusiveStartKey = response.lastEvaluatedKey() != null ? gson.toJson(response.lastEvaluatedKey()) : null;
-            } while (exclusiveStartKey != null);
+                exclusiveStartKey = response.lastEvaluatedKey();
 
-            return buildResponse(200, gson.toJson(allItems));
-        } catch (Exception e) {
-            logger.error("Error getting product reviews", e);
-            return buildResponse(500, "Error retrieving product reviews");
+            } while (exclusiveStartKey != null && allItems.size() < pageSize);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("items", allItems);
+            if (exclusiveStartKey != null) {
+                result.put("nextToken", gson.toJson(exclusiveStartKey));
+            }
+
+            return buildResponse(200, gson.toJson(result));
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error getting product reviews", e);
+            return buildResponse(500, "Error retrieving product reviews from database");
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument while getting product reviews", e);
+            return buildResponse(400, "Invalid product review request");
+        } catch (RuntimeException e) {
+            logger.error("Unexpected runtime error getting product reviews", e);
+            return buildResponse(500, "Unexpected error occurred while retrieving product reviews");
         }
     }
 
-    // import java.util.ArrayList;
-    // import java.util.List;
-    // Import ArrayList and List to handle paginated results
 
     private APIGatewayProxyResponseEvent listReviews() {
         try {
             List<Map<String, AttributeValue>> allItems = new ArrayList<>();
             Map<String, AttributeValue> lastEvaluatedKey = null;
+            int pageSize = 100; // Set a reasonable page size
 
             do {
                 ScanRequest.Builder scanRequestBuilder = ScanRequest.builder()
-                    .tableName(tableName);
+                    .tableName(tableName)
+                    .limit(pageSize);
 
                 if (lastEvaluatedKey != null) {
                     scanRequestBuilder.exclusiveStartKey(lastEvaluatedKey);
@@ -139,12 +161,23 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
                 ScanResponse response = dynamoDb.scan(scanRequestBuilder.build());
                 allItems.addAll(response.items());
                 lastEvaluatedKey = response.lastEvaluatedKey();
-            } while (lastEvaluatedKey != null);
 
-            return buildResponse(200, gson.toJson(allItems));
-        } catch (Exception e) {
+                // Check if there are more results to fetch or if we've reached the desired page size
+            } while (lastEvaluatedKey != null && allItems.size() < pageSize);
+
+            Map<String, Object> result = new HashMap<>();
+            result.put("items", allItems);
+            if (lastEvaluatedKey != null) {
+                result.put("nextToken", gson.toJson(lastEvaluatedKey));
+            }
+
+            return buildResponse(200, gson.toJson(result));
+        } catch (DynamoDbException e) {
             logger.error("Error listing reviews", e);
             return buildResponse(500, "Error listing reviews");
+        } catch (RuntimeException e) {
+            logger.error("Unexpected error while listing reviews", e);
+            return buildResponse(500, "Unexpected error occurred");
         }
     }
 
@@ -171,10 +204,11 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
 
             String reviewId = UUID.randomUUID().toString();
             Map<String, AttributeValue> sanitizedItem = new HashMap<>();
-            sanitizedItem.put("reviewId", AttributeValue.builder().s(reviewId).build());
-            sanitizedItem.put("productId", AttributeValue.builder().s(item.get("productId").toString()).build());
-            sanitizedItem.put("rating", AttributeValue.builder().n(item.get("rating").toString()).build());
-            sanitizedItem.put("comment", AttributeValue.builder().s(item.get("comment").toString()).build());
+            // Use OWASP Encoder to sanitize input
+            sanitizedItem.put("reviewId", AttributeValue.builder().s(Encode.forHtml(reviewId)).build());
+            sanitizedItem.put("productId", AttributeValue.builder().s(Encode.forHtml(item.get("productId").s())).build());
+            sanitizedItem.put("rating", AttributeValue.builder().n(item.get("rating").n()).build());
+            sanitizedItem.put("comment", AttributeValue.builder().s(Encode.forHtml(item.get("comment").s())).build());
 
             dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
@@ -188,9 +222,9 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
         } catch (IllegalArgumentException e) {
             logger.error("Invalid argument while creating review", e);
             return buildResponse(400, "Invalid review data");
-        } catch (Exception e) {
-            logger.error("Unexpected error creating review", e);
-            return buildResponse(500, "Unexpected error creating review");
+        } catch (RuntimeException e) {
+            logger.error("Unexpected error creating review: {}", e.toString(), e);
+            return buildResponse(500, "An internal server error occurred while creating the review.");
         }
     }
 
@@ -211,7 +245,15 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
             try {
                 JsonObject jsonObject = JsonParser.parseString(reviewJson).getAsJsonObject();
                 for (Map.Entry<String, JsonElement> entry : jsonObject.entrySet()) {
-                    item.put(entry.getKey(), AttributeValue.builder().s(entry.getValue().getAsString()).build());
+                    if (entry.getKey().equals("rating")) {
+                        int rating = entry.getValue().getAsInt();
+                        if (rating < 1 || rating > 5) {
+                            return buildResponse(400, "Invalid rating value. Must be between 1 and 5.");
+                        }
+                        item.put(entry.getKey(), AttributeValue.builder().n(String.valueOf(rating)).build());
+                    } else {
+                        item.put(entry.getKey(), AttributeValue.builder().s(entry.getValue().getAsString()).build());
+                    }
                 }
             } catch (JsonSyntaxException e) {
                 logger.error("Error parsing review JSON", e);
@@ -232,19 +274,30 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
         } catch (DynamoDbException e) {
             logger.error("Error updating review in DynamoDB", e);
             return buildResponse(500, "Database error");
-        } catch (Exception e) {
-            logger.error("Unexpected error updating review", e);
-            return buildResponse(500, "Unexpected error updating review");
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument while updating review", e);
+            return buildResponse(400, "Invalid review data");
         }
     }
 
     private APIGatewayProxyResponseEvent deleteReview(String reviewId) {
         try {
+            // Check if the review exists before deletion
+            GetItemResponse getItemResponse = dynamoDb.getItem(GetItemRequest.builder()
+                .tableName(tableName)
+                .key(Map.of("reviewId", AttributeValue.builder().s(reviewId).build()))
+                .build());
+
+            if (!getItemResponse.hasItem()) {
+                return buildResponse(404, "Review not found");
+            }
+
             dynamoDb.deleteItem(DeleteItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("reviewId", AttributeValue.builder().s(reviewId).build()))
                 .build());
 
+            logger.info("Review deleted successfully: {}", reviewId);
             return buildResponse(200, "Review deleted successfully");
         } catch (ResourceNotFoundException e) {
             logger.error("DynamoDB table not found", e);
@@ -272,7 +325,7 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
             .withHeaders(headers)
             .withBody(body);
 
-        logger.info("Returning response: {}", response);
+        logger.info("Returning response with status code: {}", statusCode);
         return response;
     }
 }

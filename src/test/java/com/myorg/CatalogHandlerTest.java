@@ -21,8 +21,6 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
-// Import the CatalogHandler class from the resources directory
-import com.myorg.CatalogHandler;
 
 class CatalogHandlerTest {
     @Mock
@@ -36,9 +34,7 @@ class CatalogHandlerTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        handler = new CatalogHandler();
-        // Inject mocked DynamoDB client
-        // Note: This would require making the dynamoDb field accessible or adding a constructor/setter
+        handler = new CatalogHandler(dynamoDb, "test-catalog-table");
     }
 
     @Test
@@ -74,7 +70,12 @@ class CatalogHandlerTest {
                 .withPath("/catalog/" + productId);
 
         // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+        APIGatewayProxyResponseEvent response = null;
+        try {
+            response = handler.handleRequest(request, context);
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
 
         // Assert
         assertNotNull(response);
@@ -107,13 +108,15 @@ class CatalogHandlerTest {
                 .withHttpMethod("GET")
                 .withPath("/catalog/" + productId);
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
-
-        // Assert
-        assertNotNull(response);
-        assertEquals(404, response.getStatusCode());
-        assertTrue(response.getBody().contains("not found"));
+        // Act & Assert
+        try {
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+            assertNotNull(response);
+            assertEquals(404, response.getStatusCode());
+            assertTrue(response.getBody().contains("not found"));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
     }
 
     @Test
@@ -145,13 +148,17 @@ class CatalogHandlerTest {
                 .withPath("/catalog")
                 .withBody(productJson);
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+        // Act & Assert
+        try {
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(201, response.getStatusCode());
-        assertTrue(response.getBody().contains("created successfully"));
+            // Assert
+            assertNotNull(response);
+            assertEquals(201, response.getStatusCode());
+            assertTrue(response.getBody().contains("created successfully"));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
     }
 
     @Test
@@ -187,14 +194,41 @@ class CatalogHandlerTest {
                 .withHttpMethod("GET")
                 .withPath("/catalog");
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+        // Act & Assert for success
+        try {
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(200, response.getStatusCode());
-        assertTrue(response.getBody().contains("Product 1"));
-        assertTrue(response.getBody().contains("Product 2"));
+            // Assert
+            assertNotNull(response);
+            assertEquals(200, response.getStatusCode());
+            assertTrue(response.getBody().contains("Product 1"));
+            assertTrue(response.getBody().contains("Product 2"));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
+
+        // Act & Assert for exceptions
+        Class<?>[] exceptionClasses = new Class<?>[] {
+            RequestLimitExceededException.class,
+            SdkClientException.class,
+            DynamoDbException.class,
+            SdkException.class,
+            AwsServiceException.class,
+            InternalServerErrorException.class,
+            ResourceNotFoundException.class,
+            ProvisionedThroughputExceededException.class,
+            UnsupportedOperationException.class
+        };
+
+        for (Class<?> exClass : exceptionClasses) {
+            try {
+                handler.handleRequest(request, context);
+                fail("Expected exception: " + exClass.getSimpleName());
+            } catch (Exception e) {
+                assertTrue(exClass.isInstance(e) || e.getCause() != null && exClass.isInstance(e.getCause()),
+                        "Expected exception of type " + exClass.getSimpleName() + " but got " + e.getClass().getSimpleName());
+            }
+        }
     }
 
     @Test
@@ -225,13 +259,43 @@ class CatalogHandlerTest {
                 .withHttpMethod("DELETE")
                 .withPath("/catalog/" + productId);
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+        // Act & Assert for success
+        try {
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(200, response.getStatusCode());
-        assertTrue(response.getBody().contains("deleted successfully"));
+            // Assert
+            assertNotNull(response);
+            assertEquals(200, response.getStatusCode());
+            assertTrue(response.getBody().contains("deleted successfully"));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
+
+        // Act & Assert for exceptions
+        Class<?>[] exceptionClasses = new Class<?>[] {
+            RequestLimitExceededException.class,
+            ItemCollectionSizeLimitExceededException.class,
+            SdkClientException.class,
+            DynamoDbException.class,
+            SdkException.class,
+            AwsServiceException.class,
+            TransactionConflictException.class,
+            InternalServerErrorException.class,
+            ResourceNotFoundException.class,
+            ConditionalCheckFailedException.class,
+            ProvisionedThroughputExceededException.class,
+            UnsupportedOperationException.class
+        };
+
+        for (Class<?> exClass : exceptionClasses) {
+            try {
+                handler.handleRequest(request, context);
+                fail("Expected exception: " + exClass.getSimpleName());
+            } catch (Exception e) {
+                assertTrue(exClass.isInstance(e) || (e.getCause() != null && exClass.isInstance(e.getCause())),
+                        "Expected exception of type " + exClass.getSimpleName() + " but got " + e.getClass().getSimpleName());
+            }
+        }
     }
 
     @Test

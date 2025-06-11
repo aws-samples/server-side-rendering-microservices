@@ -14,27 +14,48 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.regex.Pattern;
+
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonPrimitive;
 import com.google.gson.JsonSyntaxException;
 
 public class NotificationsHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
     private static final Logger logger = LoggerFactory.getLogger(NotificationsHandler.class);
     private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-    private final DynamoDbClient dynamoDb = DynamoDbClient.builder().build();
-    private final SnsClient sns = SnsClient.builder().build();
-    private final String tableName = System.getenv("NOTIFICATIONS_TABLE_NAME");
-    private final String snsTopicArn = System.getenv("NOTIFICATIONS_TOPIC_ARN");
+    private final DynamoDbClient dynamoDbClient;
+    private final SnsClient snsClient;
+    private final String tableName;
+    private final String snsTopicArn;
+
+    public NotificationsHandler() {
+        this(
+            DynamoDbClient.builder().build(),
+            SnsClient.builder().build(),
+            System.getenv("NOTIFICATIONS_TABLE_NAME"),
+            System.getenv("NOTIFICATIONS_TOPIC_ARN")
+        );
+    }
+
+    public NotificationsHandler(DynamoDbClient dynamoDbClient, SnsClient snsClient, String tableName, String snsTopicArn) {
+        this.dynamoDbClient = dynamoDbClient;
+        this.snsClient = snsClient;
+        this.tableName = tableName;
+        this.snsTopicArn = snsTopicArn;
+    }
 
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent request, Context context) {
-        logger.info("Received request: {}", request);
+        logger.info("Received request - HTTP Method: {}, Path: {}, Body: {}", 
+            request.getHttpMethod(), request.getPath(), request.getBody());
         
         try {
             String httpMethod = request.getHttpMethod();
@@ -52,20 +73,31 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                 default:
                     return buildResponse(400, "Invalid HTTP method");
             }
-        } catch (Exception e) {
-            logger.error("Error processing request", e);
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument", e);
+            return buildResponse(400, "Bad request: " + e.getMessage());
+        } catch (RuntimeException e) {
+            logger.error("Runtime error: {}", e.getMessage(), e);
             return buildResponse(500, "Internal server error: " + e.getMessage());
         }
     }
 
+    // import java.util.regex.Pattern
+
     private APIGatewayProxyResponseEvent handleGetRequest(String path) {
-        if (path.matches("/notifications/user/\\w+")) {
-            return getUserNotifications(path.split("/")[3]);
-        } else if (path.matches("/notifications/\\w+")) {
+        if (Pattern.matches("/notifications/user/\\w+", path)) {
+            java.util.regex.Matcher matcher = Pattern.compile("/notifications/user/(\\w+)").matcher(path);
+            if (matcher.matches()) {
+                String userId = matcher.group(1);
+                return getUserNotifications(userId);
+            } else {
+                logger.error("Failed to extract userId from path: {}", path);
+                return buildResponse(400, "Invalid user notifications path");
+            }
+        } else if (Pattern.matches("/notifications/\\w+", path)) {
             return getNotification(path.substring(path.lastIndexOf("/") + 1));
-        } else {
-            return listNotifications();
         }
+        return listNotifications();
     }
 
     private APIGatewayProxyResponseEvent handlePutRequest(String path) {
@@ -84,7 +116,7 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
 
     private APIGatewayProxyResponseEvent getNotification(String notificationId) {
         try {
-            GetItemResponse response = dynamoDb.getItem(GetItemRequest.builder()
+            GetItemResponse response = dynamoDbClient.getItem(GetItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("notificationId", AttributeValue.builder().s(notificationId).build()))
                 .projectionExpression("notificationId, message, timestamp, read") 
@@ -98,6 +130,7 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
         } catch (DynamoDbException e) {
             logger.error("Error getting notification from DynamoDB", e);
             return buildResponse(500, "Error retrieving notification from database");
+        // amazonq-ignore-next-line
         } catch (Exception e) {
             logger.error("Unexpected error getting notification", e);
             return buildResponse(500, "Unexpected error retrieving notification");
@@ -120,17 +153,28 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                     queryBuilder.exclusiveStartKey(lastEvaluatedKey);
                 }
 
-                QueryResponse response = dynamoDb.query(queryBuilder.build());
+                QueryResponse response = dynamoDbClient.query(queryBuilder.build());
                 allItems.addAll(response.items());
                 lastEvaluatedKey = response.lastEvaluatedKey();
+
+                // Check if there are more results to fetch
+                if (response.hasLastEvaluatedKey()) {
+                    lastEvaluatedKey = response.lastEvaluatedKey();
+                } else {
+                    lastEvaluatedKey = null;
+                }
             } while (lastEvaluatedKey != null);
 
             return buildResponse(200, gson.toJson(allItems));
-        } catch (Exception e) {
-            logger.error("Error getting user notifications", e);
-            return buildResponse(500, "Error retrieving user notifications");
+        } catch (DynamoDbException e) {
+            logger.error("Error querying DynamoDB", e);
+            return buildResponse(500, "An error occurred while processing your request");
+        } catch (RuntimeException e) {
+            logger.error("Unexpected error", e);
+            return buildResponse(500, "An unexpected error occurred");
         }
     }
+
 
     private APIGatewayProxyResponseEvent listNotifications() {
         try {
@@ -145,15 +189,18 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                     scanRequestBuilder.exclusiveStartKey(lastEvaluatedKey);
                 }
 
-                ScanResponse response = dynamoDb.scan(scanRequestBuilder.build());
+                ScanResponse response = dynamoDbClient.scan(scanRequestBuilder.build());
                 allItems.addAll(response.items());
                 lastEvaluatedKey = response.lastEvaluatedKey();
             } while (lastEvaluatedKey != null);
 
             return buildResponse(200, gson.toJson(allItems));
-        } catch (Exception e) {
+        } catch (DynamoDbException e) {
             logger.error("Error listing notifications", e);
             return buildResponse(500, "Error listing notifications");
+        } catch (Exception e) {
+            logger.error("Unexpected error listing notifications", e);
+            return buildResponse(500, "Unexpected error listing notifications");
         }
     }
 
@@ -169,21 +216,31 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
             item.put("read", AttributeValue.builder().bool(false).build());
             item.put("timestamp", AttributeValue.builder().s(String.valueOf(System.currentTimeMillis())).build());
 
+            // Convert JsonObject to Map<String, AttributeValue> more efficiently
             for (Map.Entry<String, JsonElement> entry : jsonObject.entrySet()) {
                 String key = entry.getKey();
-                String value = entry.getValue().getAsString();
-                item.put(key, AttributeValue.builder().s(value).build());
+                JsonElement value = entry.getValue();
+                if (value.isJsonPrimitive()) {
+                    JsonPrimitive primitive = value.getAsJsonPrimitive();
+                    if (primitive.isString()) {
+                        item.put(key, AttributeValue.builder().s(primitive.getAsString()).build());
+                    } else if (primitive.isNumber()) {
+                        item.put(key, AttributeValue.builder().n(primitive.getAsString()).build());
+                    } else if (primitive.isBoolean()) {
+                        item.put(key, AttributeValue.builder().bool(primitive.getAsBoolean()).build());
+                    }
+                }
             }
 
             // Store in DynamoDB
-            dynamoDb.putItem(PutItemRequest.builder()
+            dynamoDbClient.putItem(PutItemRequest.builder()
                 .tableName(tableName)
                 .item(item)
                 .build());
 
             // Publish to SNS if topic ARN is configured
             if (snsTopicArn != null && !snsTopicArn.isEmpty()) {
-                sns.publish(PublishRequest.builder()
+                snsClient.publish(PublishRequest.builder()
                     .topicArn(snsTopicArn)
                     .message(gson.toJson(item))
                     .build());
@@ -201,7 +258,7 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
             return buildResponse(400, "Invalid JSON format");
         } catch (Exception e) {
             logger.error("Unexpected error creating notification", e);
-            return buildResponse(500, "Unexpected error creating notification");
+            throw new RuntimeException("Unexpected error creating notification", e);
         }
     }
 
@@ -210,7 +267,7 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
             Map<String, AttributeValue> key = Map.of("notificationId", AttributeValue.builder().s(notificationId).build());
             
             // Check if the notification exists before updating
-            GetItemResponse getItemResponse = dynamoDb.getItem(GetItemRequest.builder()
+            GetItemResponse getItemResponse = dynamoDbClient.getItem(GetItemRequest.builder()
                 .tableName(tableName)
                 .key(key)
                 .build());
@@ -219,7 +276,7 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                 return buildResponse(404, "Notification not found");
             }
 
-            dynamoDb.updateItem(UpdateItemRequest.builder()
+            dynamoDbClient.updateItem(UpdateItemRequest.builder()
                 .tableName(tableName)
                 .key(key)
                 .updateExpression("SET #read = :val")
@@ -231,12 +288,15 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
         } catch (DynamoDbException e) {
             logger.error("Error marking notification as read", e);
             return buildResponse(500, "Error updating notification");
+        } catch (Exception e) {
+            logger.error("Unexpected error marking notification as read", e);
+            return buildResponse(500, "Unexpected error updating notification");
         }
     }
 
     private APIGatewayProxyResponseEvent deleteNotification(String notificationId) {
         try {
-            DeleteItemResponse deleteItemResponse = dynamoDb.deleteItem(DeleteItemRequest.builder()
+            DeleteItemResponse deleteItemResponse = dynamoDbClient.deleteItem(DeleteItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("notificationId", AttributeValue.builder().s(notificationId).build()))
                 .returnValues(ReturnValue.ALL_OLD)
@@ -246,29 +306,33 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
                 return buildResponse(404, "Notification not found");
             }
 
-            return buildResponse(200, String.format("Notification deleted successfully. Deleted item: %s", gson.toJson(deleteItemResponse.attributes())));
+            return buildResponse(200, String.format("Notification deleted successfully. Deleted notification ID: %s", notificationId));
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error deleting notification", e);
+            return buildResponse(500, "DynamoDB error deleting notification");
         } catch (Exception e) {
-            logger.error("Error deleting notification", e);
-            return buildResponse(500, "Error deleting notification");
+            logger.error("Unexpected error deleting notification", e);
+            throw new RuntimeException("Unexpected error deleting notification", e);
         }
     }
 
     private APIGatewayProxyResponseEvent buildResponse(int statusCode, String body) {
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
             .withStatusCode(statusCode)
-            .withHeaders(createHeaders())
+            .withHeaders(HEADERS)
             .withBody(body);
 
         logger.info("Returning response: {}", response);
         return response;
     }
 
-    private Map<String, String> createHeaders() {
+    private static final Map<String, String> HEADERS;
+    static {
         Map<String, String> headers = new HashMap<>();
         headers.put("Content-Type", "application/json");
         headers.put("Access-Control-Allow-Origin", "*");
         headers.put("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
         headers.put("Access-Control-Allow-Headers", "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token");
-        return headers;
+        HEADERS = Collections.unmodifiableMap(headers);
     }
 }

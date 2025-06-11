@@ -1,85 +1,73 @@
-# Java-based Serverless Microservices Architecture with CDK
+# Server-Side Rendering Microservices with AWS CDK
 
-This project demonstrates a serverless microservices architecture built using Java and the AWS Cloud Development Kit (CDK). It implements a scalable system with three main services: Catalog, Review, and Notifications, leveraging AWS Lambda, API Gateway, and other AWS services.
+This project demonstrates a server-side rendering (SSR) architecture using AWS CDK with Java. It implements a scalable system that combines serverless Lambda functions with containerized rendering services.
 
 ## Architecture Overview
 
-The application is built with the following components:
+![Architecture Diagram](https://via.placeholder.com/800x400?text=SSR+Microservices+Architecture)
 
-1. **Catalog Service**: Handles product catalog management and queries
-2. **Review Service**: Manages customer reviews and ratings
-3. **Notifications Service**: Handles system notifications and alerts
+The application consists of these key components:
 
-Each service is implemented as a separate Lambda function, providing isolation and independent scaling.
+1. **CloudFront Distribution**: Entry point for all user requests, with WAF protection
+2. **S3 Bucket**: Stores static assets (CSS, JS, images)
+3. **ECS Fargate Service**: Orchestrates the server-side rendering process
+4. **Lambda Functions**:
+   - **Catalog Service**: Manages product data
+   - **Review Service**: Handles customer reviews
+   - **Notifications Service**: Manages user notifications with SNS integration
 
-### Key AWS Services Used:
-- AWS Lambda for serverless compute
-- Amazon API Gateway for REST API management
-- Amazon DynamoDB for data storage
-- AWS Secrets Manager for sensitive configuration
-- Amazon CloudWatch for monitoring and logging
+### Request Flow
+
+1. User requests arrive at CloudFront
+2. Static content is served directly from S3
+3. Dynamic API requests route to the Fargate service
+4. Fargate containers invoke Lambda functions to fetch data
+5. The rendered HTML is returned to the user
 
 ## Prerequisites
 
-1. Java 17 or later
-2. Maven 3.8+
-3. AWS CLI configured with appropriate credentials
-4. AWS CDK CLI installed (`npm install -g aws-cdk`)
+- Java 17+
+- Maven 3.8+
+- AWS CLI configured
+- AWS CDK CLI installed (`npm install -g aws-cdk`)
+- Docker (for local testing)
 
-## Getting Started
+## Deployment
 
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/aws-samples/server-side-rendering-microservices.git
-   cd java-ssr-micro_service
-   ```
-
-2. Build the project:
+1. Build the project:
    ```bash
    mvn clean package
    ```
 
-3. Deploy to AWS:
+2. Deploy to AWS:
    ```bash
    cdk deploy
    ```
 
-## Environment Configuration
+3. Access the application:
+   - The CloudFront URL will be displayed in the CDK output
+   - API endpoints are available at `/api/*`
 
-The application supports multiple environments through CDK contexts:
+## Environment Variables
 
-- Development: `cdk deploy -c env=dev`
-- Staging: `cdk deploy -c env=staging`
-- Production: `cdk deploy -c env=prod`
+The Lambda functions require these environment variables:
+- `CATALOG_TABLE_NAME`: DynamoDB table for catalog data
+- `REVIEW_TABLE_NAME`: DynamoDB table for reviews
+- `NOTIFICATIONS_TABLE_NAME`: DynamoDB table for notifications
+- `NOTIFICATIONS_TOPIC_ARN`: SNS topic ARN for notifications
 
-## Monitoring and Logging
+## Security Features
 
-All Lambda functions are configured with CloudWatch logging. Access logs through:
-1. AWS Console > CloudWatch > Log Groups
-2. Each function has its own log group: `/aws/lambda/<function-name>`
+- WAF protection for CloudFront
+- S3 bucket with blocked public access
+- IAM permissions following least privilege principle
+- CORS headers for API responses
 
-## Troubleshooting
+## Monitoring and Troubleshooting
 
-Common issues and solutions:
-
-1. **Deployment Failures**
-   - Ensure AWS credentials are properly configured
-   - Check CloudFormation console for detailed error messages
-   - Verify sufficient IAM permissions
-
-2. **Runtime Errors**
-   - Check CloudWatch logs for each Lambda function
-   - Verify environment variables and configurations
-   - Ensure DynamoDB tables are properly provisioned
-
-3. **API Gateway Issues**
-   - Verify API Gateway deployment stage
-   - Check CORS configurations if applicable
-   - Validate Lambda function permissions
-
-## Contributing
-
-Contributions to this project are welcome! If you find any issues or have suggestions for improvements, please open an issue or submit a pull request.
+- CloudWatch logs for Lambda functions and Fargate tasks
+- CloudFront distribution metrics
+- WAF security metrics
 
 ## License
 

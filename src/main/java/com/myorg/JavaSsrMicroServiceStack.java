@@ -12,6 +12,7 @@ import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
 import software.amazon.awscdk.services.iam.Effect;
 import software.amazon.awscdk.services.iam.PolicyStatement;
+import software.amazon.awscdk.services.iam.ServicePrincipal;
 import software.amazon.awscdk.services.lambda.Architecture;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
@@ -23,9 +24,11 @@ import software.amazon.awscdk.services.s3.deployment.Source;
 import software.constructs.Construct;
 import software.amazon.awscdk.services.cloudfront.*;
 import software.amazon.awscdk.services.cloudfront.origins.*;
+import software.amazon.awscdk.services.wafv2.*;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Arrays;
 
 public class JavaSsrMicroServiceStack extends Stack {
     public JavaSsrMicroServiceStack(final Construct scope, final String id) {
@@ -37,19 +40,13 @@ public class JavaSsrMicroServiceStack extends Stack {
 
         // S3 bucket for static assets
         Bucket staticAssetsBucket = Bucket.Builder.create(this, "StaticAssetsBucket-123456543")
-                .blockPublicAccess(BlockPublicAccess.Builder.create()
-                        .blockPublicAcls(false)
-                        .ignorePublicAcls(false)
-                        .blockPublicPolicy(false)
-                        .restrictPublicBuckets(false)
-                        .build())
-                .websiteIndexDocument("index.html")
+                .blockPublicAccess(BlockPublicAccess.BLOCK_ALL)
                 .versioned(true)
                 .build();
 
-                 // Deploy static assets to S3 bucket
+        // Deploy static assets to S3 bucket
         BucketDeployment.Builder.create(this, "DeployStaticAssets")
-                .sources(List.of(Source.asset("src/main/java/com/myorg/static/resources/indexl.html")))
+                .sources(List.of(Source.asset("src/main/java/com/myorg/static/resources")))
                 .destinationBucket(staticAssetsBucket)
                 .build();
 
@@ -58,22 +55,26 @@ public class JavaSsrMicroServiceStack extends Stack {
                 .architecture(Architecture.ARM_64)
                 .runtime(Runtime.JAVA_17)
                 .handler("com.myorg.CatalogHandler::handleRequest")
-                .code(Code.fromAsset("target/java-ssr-micro_service-0.1-catalog.jar"))
+                .code(Code.fromAsset("target/classes"))
+                .retryAttempts(2)
                 .build();
 
         Function reviewFunction = Function.Builder.create(this, "ReviewFunction")
                 .architecture(Architecture.ARM_64)
                 .runtime(Runtime.JAVA_17)                
                 .handler("com.myorg.ReviewHandler::handleRequest")
-                .code(Code.fromAsset("target/java-ssr-micro_service-0.1-review.jar"))
+                .code(Code.fromAsset("target/classes"))
+                .retryAttempts(2)
                 .build();
 
         Function notificationsFunction = Function.Builder.create(this, "NotificationsFunction")
                 .architecture(Architecture.ARM_64)
                 .runtime(Runtime.JAVA_17)
                 .handler("com.myorg.NotificationsHandler::handleRequest")
-                .code(Code.fromAsset("target/java-ssr-micro_service-0.1-notifications.jar"))
+                .code(Code.fromAsset("target/classes"))
+                .retryAttempts(2)
                 .build();
+             
 
         // Grant permissions to the Fargate service to invoke the Lambda functions
         PolicyStatement invokeLambdaPolicy = PolicyStatement.Builder.create()
@@ -121,10 +122,70 @@ public class JavaSsrMicroServiceStack extends Stack {
         // Attach the policy to the task role
         taskDefinition.getTaskRole().addToPrincipalPolicy(invokeLambdaPolicy);
 
-        // CloudFront Distribution
+        // Create WAF Web ACL
+        CfnWebACL webAcl = CfnWebACL.Builder.create(this, "CloudFrontWAF")
+                .defaultAction(CfnWebACL.DefaultActionProperty.builder()
+                        .allow(CfnWebACL.AllowActionProperty.builder().build())
+                        .build())
+                .scope("CLOUDFRONT")
+                .visibilityConfig(CfnWebACL.VisibilityConfigProperty.builder()
+                        .cloudWatchMetricsEnabled(true)
+                        .metricName("CloudFrontWAFMetrics")
+                        .sampledRequestsEnabled(true)
+                        .build())
+                .rules(Arrays.asList(
+                    // Rate limiting rule
+                    CfnWebACL.RuleProperty.builder()
+                        .name("RateLimitRule")
+                        .priority(1)
+                        .action(CfnWebACL.RuleActionProperty.builder()
+                            .block(CfnWebACL.BlockActionProperty.builder().build())
+                            .build())
+                        .statement(CfnWebACL.StatementProperty.builder()
+                            .rateBasedStatement(CfnWebACL.RateBasedStatementProperty.builder()
+                                .limit(2000)
+                                .aggregateKeyType("IP")
+                                .forwardedIpConfig(CfnWebACL.ForwardedIPConfigurationProperty.builder()
+                                    .headerName("X-Forwarded-For")
+                                    .fallbackBehavior("MATCH")
+                                    .build())
+                                .build())
+                            .build())
+                        .visibilityConfig(CfnWebACL.VisibilityConfigProperty.builder()
+                            .cloudWatchMetricsEnabled(true)
+                            .metricName("RateLimitRule")
+                            .sampledRequestsEnabled(true)
+                            .build())
+                        .build(),
+                    // AWS Managed Rules - Common Rule Set
+                    CfnWebACL.RuleProperty.builder()
+                        .name("AWSManagedRulesCommonRuleSet")
+                        .priority(2)
+                        .statement(CfnWebACL.StatementProperty.builder()
+                            .managedRuleGroupStatement(CfnWebACL.ManagedRuleGroupStatementProperty.builder()
+                                .vendorName("AWS")
+                                .name("AWSManagedRulesCommonRuleSet")
+                                .excludedRules(Arrays.asList())
+                                .build())
+                            .build())
+                        .overrideAction(CfnWebACL.OverrideActionProperty.builder()
+                            .none(Map.of())
+                            .build())
+                        .visibilityConfig(CfnWebACL.VisibilityConfigProperty.builder()
+                            .cloudWatchMetricsEnabled(true)
+                            .metricName("AWSManagedRulesCommonRuleSetMetric")
+                            .sampledRequestsEnabled(true)
+                            .build())
+                        .build()
+                ))
+                .build();
+
+        // CloudFront Distribution with OAC
         Distribution distribution = Distribution.Builder.create(this, "CloudFrontDistribution")
+                .webAclId(webAcl.getAttrArn())
                 .defaultBehavior(BehaviorOptions.builder()
-                        .origin(new S3Origin(staticAssetsBucket))
+                        .origin(S3Origin.Builder.create(staticAssetsBucket)
+                                .build())
                         .build())
                 .additionalBehaviors(Map.of(
                         "/api/*", BehaviorOptions.builder()
@@ -132,6 +193,19 @@ public class JavaSsrMicroServiceStack extends Stack {
                                 .build()
                 ))
                 .build();
+
+        // Add bucket policy to allow access only from CloudFront OAC
+        staticAssetsBucket.addToResourcePolicy(PolicyStatement.Builder.create()
+                .effect(Effect.ALLOW)
+                .actions(Arrays.asList("s3:GetObject"))
+                .resources(Arrays.asList(staticAssetsBucket.arnForObjects("*")))
+                .principals(Arrays.asList(new ServicePrincipal("cloudfront.amazonaws.com")))
+                .conditions(Map.of(
+                        "StringEquals", Map.of(
+                                "AWS:SourceArn", distribution.getDistributionDomainName()
+                        )
+                ))
+                .build());
 
         // Outputs
         new CfnOutput(this, "StaticAssetsBucketName", CfnOutputProps.builder()
@@ -144,6 +218,25 @@ public class JavaSsrMicroServiceStack extends Stack {
 
         new CfnOutput(this, "CloudFrontURL", CfnOutputProps.builder()
                 .value(distribution.getDistributionDomainName())
+                .build());
+                
+        // Lambda function ARNs outputs
+        new CfnOutput(this, "CatalogFunctionArn", CfnOutputProps.builder()
+                .value(catalogFunction.getFunctionArn())
+                .build());
+                
+        new CfnOutput(this, "ReviewFunctionArn", CfnOutputProps.builder()
+                .value(reviewFunction.getFunctionArn())
+                .build());
+                
+        new CfnOutput(this, "NotificationsFunctionArn", CfnOutputProps.builder()
+                .value(notificationsFunction.getFunctionArn())
+                .build());
+
+        // Output the WAF Web ACL ARN
+        new CfnOutput(this, "WAFWebACLArn", CfnOutputProps.builder()
+                .value(webAcl.getAttrArn())
+                .description("ARN of the WAF Web ACL protecting the CloudFront distribution")
                 .build());
     }
 }

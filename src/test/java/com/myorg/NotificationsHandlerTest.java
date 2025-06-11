@@ -42,9 +42,7 @@ class NotificationsHandlerTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
-        handler = new NotificationsHandler();
-        // Inject mocked clients
-        // Note: This would require making the fields accessible or adding constructors/setters
+        handler = new NotificationsHandler(dynamoDb, sns, "test-notifications-table", "test-topic-arn");
     }
 
     @Test
@@ -61,19 +59,23 @@ class NotificationsHandlerTest {
                 .item(item)
                 .build();
 
-        when(dynamoDb.getItem(any(GetItemRequest.class))).thenReturn(getItemResponse);
+        try {
+            when(dynamoDb.getItem(any(GetItemRequest.class))).thenReturn(getItemResponse);
 
-        APIGatewayProxyRequestEvent request = new APIGatewayProxyRequestEvent()
-                .withHttpMethod("GET")
-                .withPath("/notifications/" + notificationId);
+            APIGatewayProxyRequestEvent request = new APIGatewayProxyRequestEvent()
+                    .withHttpMethod("GET")
+                    .withPath("/notifications/" + notificationId);
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+            // Act
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(200, response.getStatusCode());
-        assertTrue(response.getBody().contains(notificationId));
+            // Assert
+            assertNotNull(response);
+            assertEquals(200, response.getStatusCode());
+            assertTrue(response.getBody().contains(notificationId));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
     }
 
     @Test
@@ -166,33 +168,41 @@ class NotificationsHandlerTest {
                 .withPath("/notifications")
                 .withBody(notificationJson);
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+        // Act & Assert
+        try {
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(201, response.getStatusCode());
-        assertTrue(response.getBody().contains("created successfully"));
+            // Assert
+            assertNotNull(response);
+            assertEquals(201, response.getStatusCode());
+            assertTrue(response.getBody().contains("created successfully"));
+        } catch (Exception e) {
+            fail("Exception should be handled within the handler: " + e.getMessage());
+        }
     }
 
     @Test
     void testMarkNotificationAsRead_Success() {
         // Arrange
         String notificationId = "test-notification-1";
-        when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
-                .thenReturn(UpdateItemResponse.builder().build());
+        try {
+            when(dynamoDb.updateItem(any(UpdateItemRequest.class)))
+                    .thenReturn(UpdateItemResponse.builder().build());
 
-        APIGatewayProxyRequestEvent request = new APIGatewayProxyRequestEvent()
-                .withHttpMethod("PUT")
-                .withPath("/notifications/" + notificationId + "/read");
+            APIGatewayProxyRequestEvent request = new APIGatewayProxyRequestEvent()
+                    .withHttpMethod("PUT")
+                    .withPath("/notifications/" + notificationId + "/read");
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+            // Act
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(200, response.getStatusCode());
-        assertTrue(response.getBody().contains("marked as read"));
+            // Assert
+            assertNotNull(response);
+            assertEquals(200, response.getStatusCode());
+            assertTrue(response.getBody().contains("marked as read"));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
     }
 
     @Test
@@ -223,13 +233,17 @@ class NotificationsHandlerTest {
                 .withHttpMethod("DELETE")
                 .withPath("/notifications/" + notificationId);
 
-        // Act
-        APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
+        // Act & Assert
+        try {
+            APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
 
-        // Assert
-        assertNotNull(response);
-        assertEquals(200, response.getStatusCode());
-        assertTrue(response.getBody().contains("deleted successfully"));
+            // Assert
+            assertNotNull(response);
+            assertEquals(200, response.getStatusCode());
+            assertTrue(response.getBody().contains("deleted successfully"));
+        } catch (Exception e) {
+            fail("Unexpected exception thrown: " + e.getMessage());
+        }
     }
 
     @Test

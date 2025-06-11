@@ -4,6 +4,8 @@ import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.*;
+
+import org.owasp.encoder.Encode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
@@ -13,11 +15,18 @@ import java.util.Map;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+
 public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
     private static final Logger logger = LoggerFactory.getLogger(CatalogHandler.class);
     private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
-    private static final DynamoDbClient dynamoDb = DynamoDbClient.builder().build();
+    private DynamoDbClient dynamoDb;
     private final String tableName = System.getenv("CATALOG_TABLE_NAME");
+
+    public CatalogHandler() {
+        this.dynamoDb = DynamoDbClient.builder().build();
+    }
 
     @Override
     public APIGatewayProxyResponseEvent handleRequest(APIGatewayProxyRequestEvent request, Context context) {
@@ -29,7 +38,9 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
             
             switch (httpMethod) {
                 case "GET":
-                    if (path.matches("/catalog/\\w+")) {
+                    if (path.equals("/health")) {
+                        return buildResponse(200, "{\"status\":\"healthy\"}");
+                    } else if (path.matches("/catalog/\\w+")) {
                         return getProduct(path.substring(path.lastIndexOf("/") + 1));
                     } else {
                         return listProducts();
@@ -51,14 +62,28 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
                 default:
                     return buildResponse(400, "Invalid HTTP method");
             }
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error processing request", e);
+            return buildResponse(503, "Database service unavailable: " + e.getMessage());
+        } catch (JsonSyntaxException e) {
+            logger.error("JSON parsing error processing request", e);
+            return buildResponse(400, "Invalid JSON format: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument error processing request", e);
+            return buildResponse(400, "Invalid argument: " + e.getMessage());
         } catch (Exception e) {
-            logger.error("Error processing request", e);
-            return buildResponse(500, "Internal server error: " + e.getMessage());
+            logger.error("Unexpected error processing request", e);
+            return buildResponse(500, "Internal server error");
         }
     }
 
     private APIGatewayProxyResponseEvent getProduct(String productId) {
         try {
+            if (productId == null || productId.isEmpty()) {
+                logger.error("Invalid productId: null or empty");
+                return buildResponse(400, "Invalid productId: null or empty");
+            }
+
             GetItemResponse response = dynamoDb.getItem(GetItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("productId", AttributeValue.builder().s(productId).build()))
@@ -72,9 +97,9 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
         } catch (DynamoDbException e) {
             logger.error("Error getting product from DynamoDB", e);
             return buildResponse(500, "Error retrieving product from database");
-        } catch (Exception e) {
-            logger.error("Unexpected error getting product", e);
-            return buildResponse(500, "Unexpected error retrieving product");
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument while getting product", e);
+            return buildResponse(400, "Invalid argument: " + e.getMessage());
         }
     }
 
@@ -84,25 +109,26 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
     private APIGatewayProxyResponseEvent listProducts() {
         try {
             List<Map<String, AttributeValue>> allItems = new ArrayList<>();
-            Map<String, AttributeValue> lastEvaluatedKey = null;
 
-            do {
-                ScanRequest.Builder scanRequestBuilder = ScanRequest.builder()
-                    .tableName(tableName);
+            // Use the paginator for auto-pagination
+            ScanRequest scanRequest = ScanRequest.builder()
+                .tableName(tableName)
+                .build();
 
-                if (lastEvaluatedKey != null) {
-                    scanRequestBuilder.exclusiveStartKey(lastEvaluatedKey);
-                }
-
-                ScanResponse response = dynamoDb.scan(scanRequestBuilder.build());
-                allItems.addAll(response.items());
-                lastEvaluatedKey = response.lastEvaluatedKey();
-            } while (lastEvaluatedKey != null);
+            dynamoDb.scanPaginator(scanRequest).stream()
+                .flatMap(scanResponse -> scanResponse.items().stream())
+                .forEach(allItems::add);
 
             return buildResponse(200, gson.toJson(allItems));
-        } catch (Exception e) {
-            logger.error("Error listing products", e);
-            return buildResponse(500, "Error listing products");
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error listing products", e);
+            return buildResponse(500, "Database error: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument while listing products", e);
+            return buildResponse(400, "Invalid argument: " + e.getMessage());
+        } catch (NullPointerException e) {
+            logger.error("Null pointer exception while listing products", e);
+            return buildResponse(500, "Internal server error: Null value encountered");
         }
     }
 
@@ -112,11 +138,20 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
                 return buildResponse(400, "Invalid product data: JSON is null or empty");
             }
             
-            Map<String, AttributeValue> item = gson.fromJson(productJson, Map.class);
+            // Import com.amazonaws.services.dynamodbv2.model.AttributeValue
+            // Import java.util.HashMap
+            // Import org.owasp.encoder.Encode
+            // These imports are needed to create a properly typed Map for DynamoDB items and to sanitize user input
+            Map<String, AttributeValue> item = new HashMap<>();
+            JsonObject jsonObject = JsonParser.parseString(productJson).getAsJsonObject();
             
-            if (!item.containsKey("productId") || !item.containsKey("name") || !item.containsKey("price")) {
+            if (!jsonObject.has("productId") || !jsonObject.has("name") || !jsonObject.has("price")) {
                 return buildResponse(400, "Invalid product data: Missing required fields");
             }
+            
+            item.put("productId", AttributeValue.builder().s(Encode.forHtml(jsonObject.get("productId").getAsString())).build());
+            item.put("name", AttributeValue.builder().s(Encode.forHtml(jsonObject.get("name").getAsString())).build());
+            item.put("price", AttributeValue.builder().n(jsonObject.get("price").getAsString()).build());
             
             dynamoDb.putItem(PutItemRequest.builder()
                 .tableName(tableName)
@@ -124,14 +159,14 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
                 .build());
 
             return buildResponse(201, "Product created successfully");
-        } catch (JsonSyntaxException e) {
-            logger.error("Error parsing JSON", e);
+        } catch (JsonSyntaxException jsonException) {
+            logger.error("Error parsing JSON", jsonException);
             return buildResponse(400, "Invalid JSON format");
-        } catch (ResourceNotFoundException e) {
-            logger.error("DynamoDB table not found", e);
+        } catch (ResourceNotFoundException resourceException) {
+            logger.error("DynamoDB table not found", resourceException);
             return buildResponse(500, "Database error");
-        } catch (DynamoDbException e) {
-            logger.error("Error interacting with DynamoDB", e);
+        } catch (DynamoDbException dbException) {
+            logger.error("Error interacting with DynamoDB", dbException);
             return buildResponse(500, "Database error");
         }
     }
@@ -150,49 +185,58 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
                 .build());
 
             return buildResponse(200, "Product updated successfully");
-        } catch (DynamoDbException e) {
-            logger.error("Error updating product in DynamoDB", e);
+        } catch (DynamoDbException dbException) {
+            logger.error("Error updating product in DynamoDB", dbException);
             return buildResponse(500, "Error updating product in database");
-        } catch (Exception e) {
-            logger.error("Unexpected error updating product", e);
-            return buildResponse(500, "Unexpected error updating product");
+        } catch (JsonSyntaxException e) {
+            logger.error("JSON parsing error updating product", e);
+            return buildResponse(400, "Invalid JSON format: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument updating product", e);
+            return buildResponse(400, "Invalid argument: " + e.getMessage());
+        } catch (NullPointerException e) {
+            logger.error("Null pointer exception while updating product", e);
+            return buildResponse(500, "Internal server error: Null value encountered");
         }
     }
 
     private APIGatewayProxyResponseEvent deleteProduct(String productId) {
         try {
-            // Check if the item exists before deletion
-            GetItemResponse getItemResponse = dynamoDb.getItem(GetItemRequest.builder()
+            DeleteItemResponse deleteItemResponse = dynamoDb.deleteItem(DeleteItemRequest.builder()
                 .tableName(tableName)
                 .key(Map.of("productId", AttributeValue.builder().s(productId).build()))
+                .returnValues(ReturnValue.ALL_OLD)
                 .build());
 
-            if (!getItemResponse.hasItem()) {
+            if (deleteItemResponse.attributes().isEmpty()) {
                 return buildResponse(404, "Product not found");
             }
 
-            dynamoDb.deleteItem(DeleteItemRequest.builder()
-                .tableName(tableName)
-                .key(Map.of("productId", AttributeValue.builder().s(productId).build()))
-                .build());
-
             return buildResponse(200, "Product deleted successfully");
-        } catch (Exception e) {
-            logger.error("Error deleting product with ID: {}", productId, e);
-            return buildResponse(500, "Error deleting product");
+        } catch (DynamoDbException e) {
+            logger.error("DynamoDB error deleting product with ID: {}", productId, e);
+            return buildResponse(500, "Database error: " + e.getMessage());
+        } catch (IllegalArgumentException e) {
+            logger.error("Invalid argument while deleting product with ID: {}", productId, e);
+            return buildResponse(400, "Invalid argument: " + e.getMessage());
+        } catch (NullPointerException e) {
+            logger.error("Null pointer exception while deleting product with ID: {}", productId, e);
+            return buildResponse(500, "Internal server error: Null value encountered");
         }
     }
 
-    private APIGatewayProxyResponseEvent buildResponse(int statusCode, String body) {
-        Map<String, String> headers = new HashMap<>();
-        headers.put("Content-Type", "application/json");
-        headers.put("Access-Control-Allow-Origin", "*");
-        headers.put("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
-        headers.put("Access-Control-Allow-Headers", "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token");
+    private static final Map<String, String> RESPONSE_HEADERS = new HashMap<>();
+    static {
+        RESPONSE_HEADERS.put("Content-Type", "application/json");
+        RESPONSE_HEADERS.put("Access-Control-Allow-Origin", "*");
+        RESPONSE_HEADERS.put("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS");
+        RESPONSE_HEADERS.put("Access-Control-Allow-Headers", "Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token");
+    }
 
+    private APIGatewayProxyResponseEvent buildResponse(int statusCode, String body) {
         APIGatewayProxyResponseEvent response = new APIGatewayProxyResponseEvent()
             .withStatusCode(statusCode)
-            .withHeaders(headers)
+            .withHeaders(RESPONSE_HEADERS)
             .withBody(body);
 
         logger.info("Returning response: {}", response);
