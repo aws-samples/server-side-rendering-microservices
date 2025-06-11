@@ -1,3 +1,5 @@
+package com.myorg;
+
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
@@ -10,8 +12,6 @@ import software.amazon.awssdk.services.sns.model.SnsException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import software.amazon.awssdk.services.dynamodb.model.ScanRequest;
-import software.amazon.awssdk.services.dynamodb.model.ScanResponse;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -131,7 +131,6 @@ public class NotificationsHandler implements RequestHandler<APIGatewayProxyReque
             return buildResponse(500, "Error retrieving user notifications");
         }
     }
-
 
     private APIGatewayProxyResponseEvent listNotifications() {
         try {

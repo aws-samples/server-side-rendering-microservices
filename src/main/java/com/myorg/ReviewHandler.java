@@ -1,12 +1,11 @@
+package com.myorg;
+
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyResponseEvent;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.*;
-// import software.amazon.awssdk.thirdparty.jackson.core.JsonParser;
-import com.google.gson.JsonParser;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -17,8 +16,9 @@ import java.util.Map;
 import java.util.UUID;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonSyntaxException;
 
 public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
@@ -119,10 +119,6 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
         }
     }
 
-    // import java.util.ArrayList;
-    // import java.util.List;
-    // Import ArrayList and List to handle paginated results
-
     private APIGatewayProxyResponseEvent listReviews() {
         try {
             List<Map<String, AttributeValue>> allItems = new ArrayList<>();
@@ -205,19 +201,8 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
             if (!getItemResponse.hasItem()) {
                 return buildResponse(404, "Review not found");
             }
-
-            // Parse the review JSON and update the item
-            Map<String, AttributeValue> item = new HashMap<>();
-            try {
-                JsonObject jsonObject = JsonParser.parseString(reviewJson).getAsJsonObject();
-                for (Map.Entry<String, JsonElement> entry : jsonObject.entrySet()) {
-                    item.put(entry.getKey(), AttributeValue.builder().s(entry.getValue().getAsString()).build());
-                }
-            } catch (JsonSyntaxException e) {
-                logger.error("Error parsing review JSON", e);
-                return buildResponse(400, "Invalid review JSON format");
-            }
-
+            
+            Map<String, AttributeValue> item = gson.fromJson(reviewJson, Map.class);
             item.put("reviewId", AttributeValue.builder().s(reviewId).build());
 
             dynamoDb.putItem(PutItemRequest.builder()
@@ -226,15 +211,15 @@ public class ReviewHandler implements RequestHandler<APIGatewayProxyRequestEvent
                 .build());
 
             return buildResponse(200, "Review updated successfully");
+        } catch (JsonSyntaxException e) {
+            logger.error("Error parsing review JSON", e);
+            return buildResponse(400, "Invalid review JSON format");
         } catch (ResourceNotFoundException e) {
             logger.error("DynamoDB table not found", e);
             return buildResponse(500, "Database error");
         } catch (DynamoDbException e) {
             logger.error("Error updating review in DynamoDB", e);
             return buildResponse(500, "Database error");
-        } catch (Exception e) {
-            logger.error("Unexpected error updating review", e);
-            return buildResponse(500, "Unexpected error updating review");
         }
     }
 

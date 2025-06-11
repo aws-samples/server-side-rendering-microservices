@@ -1,27 +1,83 @@
-# Serverless Frontend Architecture with CDK
+# Java-based Serverless Microservices Architecture with CDK
 
-This project demonstrates a serverless frontend architecture built using the AWS Cloud Development Kit (CDK). It leverages various AWS services, including S3 for hosting the static website, Content Delivery Network (CDN), Application Load Balancer (ALB), Fargate/ECS, Secrets Manager, and Lambda functions, to create a scalable and efficient web application with microservices.
+This project demonstrates a serverless microservices architecture built using Java and the AWS Cloud Development Kit (CDK). It implements a scalable system with three main services: Catalog, Review, and Notifications, leveraging AWS Lambda, API Gateway, and other AWS services.
 
 ## Architecture Overview
 
-The frontend of the application is built using HTMX, a JavaScript library that enables modern browser capabilities without the need for complex frameworks. The frontend assets are hosted on an S3 bucket, which serves as the static website. The contents of the S3 bucket are distributed through a Content Delivery Network (CDN) for optimal performance and caching.
+![Architecture Diagram](architecture.png)
 
-The Application Load Balancer (ALB) acts as the entry point for incoming traffic, routing requests to the appropriate backend service (Fargate/ECS or Lambda) based on the requested path or endpoint.
+The application is built with the following components:
 
-The backend of the application consists of two main components:
+1. **Catalog Service**: Handles product catalog management and queries
+2. **Review Service**: Manages customer reviews and ratings
+3. **Notifications Service**: Handles system notifications and alerts
 
-1. **Fargate/ECS**: This service is responsible for running containerized applications, providing a scalable and secure environment for hosting the backend logic.
+Each service is implemented as a separate Lambda function, providing isolation and independent scaling.
 
-2. **Lambda Functions**: AWS Lambda functions handle specific backend tasks, such as data processing, API integrations, and other event-driven computations. These Lambda functions act as microservices, and their ARNs (Amazon Resource Names) are stored securely in AWS Secrets Manager.
+### Key AWS Services Used:
+- AWS Lambda for serverless compute
+- Amazon API Gateway for REST API management
+- Amazon DynamoDB for data storage
+- AWS Secrets Manager for sensitive configuration
+- Amazon CloudWatch for monitoring and logging
+
+## Prerequisites
+
+1. Java 17 or later
+2. Maven 3.8+
+3. AWS CLI configured with appropriate credentials
+4. AWS CDK CLI installed (`npm install -g aws-cdk`)
 
 ## Getting Started
 
-To get started with this project, follow these steps:
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd java-ssr-micro_service
+   ```
 
-1. Clone the repository: `git clone https://github.com/aws-samples/server-side-rendering-microservices.git`
-2. Install the required dependencies: `npm install`
-3. Configure your AWS credentials
-4. Deploy the infrastructure using the CDK: `npm run deploy`
+2. Build the project:
+   ```bash
+   mvn clean package
+   ```
+
+3. Deploy to AWS:
+   ```bash
+   cdk deploy
+   ```
+
+## Environment Configuration
+
+The application supports multiple environments through CDK contexts:
+
+- Development: `cdk deploy -c env=dev`
+- Staging: `cdk deploy -c env=staging`
+- Production: `cdk deploy -c env=prod`
+
+## Monitoring and Logging
+
+All Lambda functions are configured with CloudWatch logging. Access logs through:
+1. AWS Console > CloudWatch > Log Groups
+2. Each function has its own log group: `/aws/lambda/<function-name>`
+
+## Troubleshooting
+
+Common issues and solutions:
+
+1. **Deployment Failures**
+   - Ensure AWS credentials are properly configured
+   - Check CloudFormation console for detailed error messages
+   - Verify sufficient IAM permissions
+
+2. **Runtime Errors**
+   - Check CloudWatch logs for each Lambda function
+   - Verify environment variables and configurations
+   - Ensure DynamoDB tables are properly provisioned
+
+3. **API Gateway Issues**
+   - Verify API Gateway deployment stage
+   - Check CORS configurations if applicable
+   - Validate Lambda function permissions
 
 ## Contributing
 

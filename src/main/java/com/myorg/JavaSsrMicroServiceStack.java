@@ -57,21 +57,21 @@ public class JavaSsrMicroServiceStack extends Stack {
         Function catalogFunction = Function.Builder.create(this, "CatalogFunction")
                 .architecture(Architecture.ARM_64)
                 .runtime(Runtime.JAVA_17)
-                .handler("com.myorg.resources.CatalogHandler::handleRequest")
+                .handler("com.myorg.CatalogHandler::handleRequest")
                 .code(Code.fromAsset("target/java-ssr-micro_service-0.1-catalog.jar"))
                 .build();
 
         Function reviewFunction = Function.Builder.create(this, "ReviewFunction")
                 .architecture(Architecture.ARM_64)
                 .runtime(Runtime.JAVA_17)                
-                .handler("com.myorg.resources.ReviewHandler::handleRequest")
+                .handler("com.myorg.ReviewHandler::handleRequest")
                 .code(Code.fromAsset("target/java-ssr-micro_service-0.1-review.jar"))
                 .build();
 
         Function notificationsFunction = Function.Builder.create(this, "NotificationsFunction")
                 .architecture(Architecture.ARM_64)
                 .runtime(Runtime.JAVA_17)
-                .handler("com.myorg.resources.NotificationsHandler::handleRequest")
+                .handler("com.myorg.NotificationsHandler::handleRequest")
                 .code(Code.fromAsset("target/java-ssr-micro_service-0.1-notifications.jar"))
                 .build();
 

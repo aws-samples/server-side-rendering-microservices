@@ -1,3 +1,5 @@
+package com.myorg;
+
 import com.amazonaws.services.lambda.runtime.Context;
 import com.amazonaws.services.lambda.runtime.RequestHandler;
 import com.amazonaws.services.lambda.runtime.events.APIGatewayProxyRequestEvent;
@@ -13,6 +15,7 @@ import java.util.Map;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonSyntaxException;
+
 public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEvent, APIGatewayProxyResponseEvent> {
     private static final Logger logger = LoggerFactory.getLogger(CatalogHandler.class);
     private static final Gson gson = new GsonBuilder().setPrettyPrinting().create();
@@ -78,9 +81,6 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
         }
     }
 
-
-    // Import ArrayList and List to handle paginated results
-
     private APIGatewayProxyResponseEvent listProducts() {
         try {
             List<Map<String, AttributeValue>> allItems = new ArrayList<>();
@@ -135,9 +135,6 @@ public class CatalogHandler implements RequestHandler<APIGatewayProxyRequestEven
             return buildResponse(500, "Database error");
         }
     }
-
-
-    // These imports are needed to catch specific DynamoDB-related exceptions.
 
     private APIGatewayProxyResponseEvent updateProduct(String productId, String productJson) {
         try {
