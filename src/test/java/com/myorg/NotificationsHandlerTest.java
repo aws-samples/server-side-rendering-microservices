@@ -65,13 +65,7 @@ class NotificationsHandlerTest {
 
         APIGatewayProxyRequestEvent request = new APIGatewayProxyRequestEvent()
                 .withHttpMethod("GET")
-                .withParefactor: move Lambda handlers to com.myorg package
-
-                - Moved CatalogHandler, ReviewHandler, and NotificationsHandler from src/resources to src/main/java/com/myorg
-                - Updated handler paths in CDK stack to reflect new package structure
-                - Fixed import statements in test classes
-                - Ensures consistent package structure across Lambda handlers and tests
-th("/notifications/" + notificationId);
+                .withPath("/notifications/" + notificationId);
 
         // Act
         APIGatewayProxyResponseEvent response = handler.handleRequest(request, context);
