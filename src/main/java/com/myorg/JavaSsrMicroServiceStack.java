@@ -5,10 +5,14 @@ import software.amazon.awscdk.CfnOutputProps;
 import software.amazon.awscdk.Duration;
 import software.amazon.awscdk.Stack;
 import software.amazon.awscdk.StackProps;
+import software.amazon.awscdk.services.ecs.AssetImageProps;
+import software.amazon.awscdk.services.ecs.AwsLogDriverProps;
 import software.amazon.awscdk.services.ecs.Cluster;
 import software.amazon.awscdk.services.ecs.ContainerDefinitionOptions;
 import software.amazon.awscdk.services.ecs.ContainerImage;
 import software.amazon.awscdk.services.ecs.FargateTaskDefinition;
+import software.amazon.awscdk.services.ecs.HealthCheck;
+import software.amazon.awscdk.services.ecs.LogDriver;
 import software.amazon.awscdk.services.ecs.PortMapping;
 import software.amazon.awscdk.services.ecs.patterns.ApplicationLoadBalancedFargateService;
 import software.amazon.awscdk.services.iam.Effect;
@@ -18,6 +22,8 @@ import software.amazon.awscdk.services.lambda.Architecture;
 import software.amazon.awscdk.services.lambda.Code;
 import software.amazon.awscdk.services.lambda.Function;
 import software.amazon.awscdk.services.lambda.Runtime;
+import software.amazon.awscdk.services.logs.LogGroup;
+import software.amazon.awscdk.services.logs.RetentionDays;
 import software.amazon.awscdk.services.s3.BlockPublicAccess;
 import software.amazon.awscdk.services.s3.Bucket;
 import software.amazon.awscdk.services.s3.deployment.BucketDeployment;
@@ -25,6 +31,7 @@ import software.amazon.awscdk.services.s3.deployment.Source;
 import software.constructs.Construct;
 import software.amazon.awscdk.services.cloudfront.*;
 import software.amazon.awscdk.services.cloudfront.origins.*;
+import software.amazon.awscdk.services.ecr.assets.Platform;
 import software.amazon.awscdk.services.wafv2.*;
 
 import java.util.List;
@@ -91,6 +98,11 @@ public class JavaSsrMicroServiceStack extends Stack {
         Cluster cluster = Cluster.Builder.create(this, "ServiceCluster")
                 .build();
 
+        LogGroup logGroup = LogGroup.Builder.create(this, "FargateLogGroup")
+                .logGroupName("/ecs/java-ssr-micro-service")
+                .retention(RetentionDays.ONE_WEEK)
+                .build();
+
         // 6. Fargate Task Definition
         FargateTaskDefinition taskDefinition = FargateTaskDefinition.Builder.create(this, "TaskDef")
                 .memoryLimitMiB(512)
@@ -98,29 +110,40 @@ public class JavaSsrMicroServiceStack extends Stack {
                 .build();
 
         ContainerDefinitionOptions containerOptions = ContainerDefinitionOptions.builder()
-                .image(ContainerImage.fromAsset("."))
-                .memoryLimitMiB(512)
-                .cpu(256)
-                .portMappings(List.of(PortMapping.builder()
-                        .containerPort(80)
-                        .build()))
-                .environment(Map.of(
-                        "CATALOG_FUNCTION_NAME", catalogFunction.getFunctionName(),
-                        "REVIEW_FUNCTION_NAME", reviewFunction.getFunctionName(),
-                        "NOTIFICATIONS_FUNCTION_NAME", notificationsFunction.getFunctionName()
-                ))
-                .healthCheck(software.amazon.awscdk.services.ecs.HealthCheck.builder()
-                        .command(List.of("CMD-SHELL",
-                                "curl -f http://localhost:80/health || exit 1"))
-                        .interval(software.amazon.awscdk.Duration.seconds(60))
-                        .timeout(software.amazon.awscdk.Duration.seconds(10))
-                        .retries(5)
-                        .startPeriod(software.amazon.awscdk.Duration.seconds(120))
-                        .build())
-                .build();
+        .image(ContainerImage.fromAsset(".", AssetImageProps.builder()
+                .platform(Platform.LINUX_ARM64)
+                .build()))
+        .portMappings(List.of(PortMapping.builder().containerPort(80).build()))
+        .environment(Map.of(
+                "CATALOG_FUNCTION_NAME", catalogFunction.getFunctionName(),
+                "REVIEW_FUNCTION_NAME", reviewFunction.getFunctionName(),
+                "NOTIFICATIONS_FUNCTION_NAME", notificationsFunction.getFunctionName()
+        ))
+        .healthCheck(HealthCheck.builder()
+                .command(List.of("CMD-SHELL", "curl -f http://localhost:80/health || exit 1"))
+                .interval(Duration.seconds(60))
+                .timeout(Duration.seconds(10))
+                .retries(5)
+                .startPeriod(Duration.seconds(120))
+                .build())
+        .logging(LogDriver.awsLogs(AwsLogDriverProps.builder()
+                .streamPrefix("JavaSSR")
+                .logGroup(logGroup)
+                .build()))
+        .build();
+
+
 
         taskDefinition.addContainer("Container", containerOptions);
         taskDefinition.getTaskRole().addToPrincipalPolicy(invokeLambdaPolicy);
+        taskDefinition.getTaskRole().addToPrincipalPolicy(
+                PolicyStatement.Builder.create()
+                        .effect(Effect.ALLOW)
+                        .actions(List.of("ssm:GetParameter", "ssm:GetParameters"))
+                        .resources(List.of("arn:aws:ssm:*:*:parameter/*")) // adjust scope if needed
+                        .build()
+                );
+
 
         // 7. Internal (private) ALB, only reachable in VPC
         ApplicationLoadBalancedFargateService fargateService = ApplicationLoadBalancedFargateService.Builder.create(this, "FargateService")
