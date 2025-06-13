@@ -1,4 +1,4 @@
-FROM amazoncorretto:17-alpine
+FROM public.ecr.aws/amazoncorretto/17-alpine:latest
 
 WORKDIR /app
 
