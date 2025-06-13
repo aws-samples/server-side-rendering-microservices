@@ -44,7 +44,16 @@ The application consists of these key components:
    cdk deploy
    ```
 
-3. Access the application:
+3. Configure S3 and CloudFront:
+   ```bash
+   # Create static folder and upload index.html
+   aws s3api put-object --bucket <your-bucket-name> --key static/
+   aws s3 cp src/main/java/com/myorg/static/index.html s3://<your-bucket-name>/static/
+   ```
+   Note: Update the CloudFront distribution to use Origin Access Control (OAC) instead of the legacy Origin Access Identity (OAI) for improved security. This can be done in the CloudFront console under the origin settings.
+
+
+4. Access the application:
    - The CloudFront URL will be displayed in the CDK output
    - API endpoints are available at `/api/*`
 
