@@ -19,14 +19,7 @@
     <build>
         <sourceDirectory>${project.basedir}/src/main/java</sourceDirectory>
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <version>3.11.0</version>
-                <configuration>
-                    <release>17</release>
-                </configuration>
-            </plugin>
+            <!-- Testing -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
@@ -35,10 +28,17 @@
                     <argLine>-Dnet.bytebuddy.experimental=true</argLine>
                 </configuration>
             </plugin>
+            <!-- Regular JARs for Lambda Handlers -->
             <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.2.0</version>
+                <version>3.2.2</version>
+                <configuration>
+                    <archive>
+                        <manifest>
+                            <mainClass>com.myorg.resources.JavaSsrMicroServiceApp</mainClass>
+                        </manifest>
+                    </archive>
+                </configuration>
                 <executions>
                     <execution>
                         <id>catalog-jar</id>
@@ -49,11 +49,11 @@
                         <configuration>
                             <classifier>catalog</classifier>
                             <includes>
-                                <include>com/myorg/CatalogHandler.class</include>
+                                <include>com/myorg/resources/CatalogHandler.class</include>
                             </includes>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.myorg.CatalogHandler</mainClass>
+                                    <mainClass>com.myorg.resources.CatalogHandler</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>
@@ -67,11 +67,11 @@
                         <configuration>
                             <classifier>review</classifier>
                             <includes>
-                                <include>com/myorg/ReviewHandler.class</include>
+                                <include>com/myorg/resources/ReviewHandler.class</include>
                             </includes>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.myorg.ReviewHandler</mainClass>
+                                    <mainClass>com.myorg.resources.ReviewHandler</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>
@@ -85,18 +85,98 @@
                         <configuration>
                             <classifier>notifications</classifier>
                             <includes>
-                                <include>com/myorg/NotificationsHandler.class</include>
+                                <include>com/myorg/resources/NotificationsHandler.class</include>
                             </includes>
                             <archive>
                                 <manifest>
-                                    <mainClass>com.myorg.NotificationsHandler</mainClass>
+                                    <mainClass>com.myorg.resources.NotificationsHandler</mainClass>
                                 </manifest>
                             </archive>
                         </configuration>
+                        
+                    </execution>
+                        <execution>
+                        <id>web-jar</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>jar</goal>
+                        </goals>
+                        <configuration>
+                            <classifier>web</classifier>
+                            <includes>
+                                <include>com/myorg/docker/WebServerMain.class</include>
+                            </includes>
+                            <archive>
+                                <manifest>
+                                    <mainClass>com.myorg.docker.WebServerMain</mainClass>
+                                </manifest>
+                            </archive>
+                        </configuration>
+                        
                     </execution>
                 </executions>
             </plugin>
+            <plugin>
+  <groupId>org.apache.maven.plugins</groupId>
+  <artifactId>maven-shade-plugin</artifactId>
+  <version>3.4.1</version>
+  <executions>
+    <execution>
+      <phase>package</phase>
+      <goals>
+        <goal>shade</goal>
+      </goals>
+      <configuration>
+        <createDependencyReducedPom>false</createDependencyReducedPom>
+        <transformers>
+          <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+            <mainClass>com.myorg.JavaSsrMicroServiceApp</mainClass>
+          </transformer>
+        </transformers>
+      </configuration>
+    </execution>
+    <!-- ✅ ADD THIS INSIDE THE EXECUTIONS TAG -->
+    <execution>
+      <id>webserver-fat-jar</id>
+      <phase>package</phase>
+      <goals>
+        <goal>shade</goal>
+      </goals>
+      <configuration>
+        <finalName>java-ssr-micro_service-0.1-web</finalName>
+        <createDependencyReducedPom>false</createDependencyReducedPom>
+        <artifactSet>
+          <includes>
+            <include>*:*</include>
+          </includes>
+        </artifactSet>
+        <filters>
+          <filter>
+            <artifact>*:*</artifact>
+            <excludes>
+              <exclude>META-INF/*.SF</exclude>
+              <exclude>META-INF/*.DSA</exclude>
+              <exclude>META-INF/*.RSA</exclude>
+            </excludes>
+          </filter>
+        </filters>
+        <transformers>
+          <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+            <mainClass>com.myorg.docker.WebServerMain</mainClass>
+          </transformer>
+        </transformers>
+      </configuration>
+    </execution>
+  </executions>
 
+
+
+  
+</plugin>
+
+
+
+            <!-- Exec Plugin for running main locally -->
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -109,58 +189,53 @@
     </build>
 
     <dependencies>
-     <dependency> <groupId>org.apache.commons</groupId> <artifactId>commons-text</artifactId> <version>1.10.0</version> </dependency>
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-text</artifactId>
+            <version>1.10.0</version>
+        </dependency>
         <!-- AWS Cloud Development Kit -->
         <dependency>
             <groupId>software.amazon.awscdk</groupId>
             <artifactId>aws-cdk-lib</artifactId>
             <version>${cdk.version}</version>
         </dependency>
-
         <dependency>
             <groupId>software.constructs</groupId>
             <artifactId>constructs</artifactId>
             <version>${constructs.version}</version>
         </dependency>
-
         <!-- AWS SDK Dependencies -->
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>dynamodb</artifactId>
             <version>${aws.sdk.version}</version>
         </dependency>
-
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sns</artifactId>
             <version>${aws.sdk.version}</version>
         </dependency>
-
         <dependency>
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-lambda-java-core</artifactId>
             <version>1.2.3</version>
         </dependency>
-
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>ssm</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>lambda</artifactId>
+            <version>${aws.sdk.version}</version>
+        </dependency>
         <dependency>
             <groupId>com.amazonaws</groupId>
             <artifactId>aws-lambda-java-events</artifactId>
             <version>3.11.4</version>
         </dependency>
-
-        <!-- Logging -->
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-api</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-
-        <dependency>
-            <groupId>org.slf4j</groupId>
-            <artifactId>slf4j-simple</artifactId>
-            <version>${slf4j.version}</version>
-        </dependency>
-
         <!-- JSON Processing -->
         <dependency>
             <groupId>com.google.code.gson</groupId>
@@ -168,22 +243,42 @@
             <version>2.10.1</version>
         </dependency>
 
+<!-- Logging: SLF4J + Logback 1.4.x (Spring Boot 3 compatible) -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-core</artifactId>
-            <version>2.16.1</version>
+            <version>2.17.1</version>
         </dependency>
-
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
-            <version>2.16.1</version>
+            <version>2.17.1</version>
         </dependency>
-
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-annotations</artifactId>
-            <version>2.16.1</version>
+            <version>2.17.1</version>
+        </dependency>
+
+
+        <!-- Force SLF4J 2.0.12 explicitly -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.12</version>
+        </dependency>
+
+        <!-- Make sure to exclude commons-logging -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <version>3.3.0</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>commons-logging</groupId>
+                    <artifactId>commons-logging</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <!-- Security -->
@@ -192,7 +287,17 @@
             <artifactId>encoder</artifactId>
             <version>1.2.3</version>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+            <version>3.3.0</version>
+        </dependency>
 
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+            <version>3.3.0</version>
+        </dependency>
         <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -200,7 +305,6 @@
             <version>${junit.version}</version>
             <scope>test</scope>
         </dependency>
-
         <dependency>
             <groupId>org.mockito</groupId>
             <artifactId>mockito-core</artifactId>

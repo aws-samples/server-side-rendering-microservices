@@ -1,0 +1,5 @@
+Manifest-Version: 1.0
+Created-By: Maven JAR Plugin 3.2.2
+Build-Jdk-Spec: 24
+Main-Class: com.myorg.JavaSsrMicroServiceApp
+
